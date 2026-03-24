@@ -164,7 +164,7 @@ export async function POST(request: Request) {
   try {
     const systemPrompt = buildSystemPrompt();
 
-    let groqMessages: GroqMessage[] = [
+    const groqMessages: GroqMessage[] = [
       { role: "system", content: systemPrompt },
       ...validatedMessages.map((m) => ({
         role: m.role as "user" | "assistant",

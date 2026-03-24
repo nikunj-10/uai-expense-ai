@@ -111,18 +111,18 @@ export default function RecentExpenses({
   deletedIds,
 }: RecentExpensesProps) {
   const [data, setData] = useState<RecentData | null>(null);
-  const [loading, setLoading] = useState(true);
+
+  // data === null means initial loading; after first load, data updates in-place
+  const loading = data === null;
 
   useEffect(() => {
     if (!isOpen) return;
-    setLoading(true);
+    let active = true;
     fetch("/api/expenses/recent")
       .then((r) => r.json())
-      .then((d) => {
-        setData(d);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+      .then((d) => { if (active) setData(d); })
+      .catch(() => {});
+    return () => { active = false; };
   }, [isOpen, refreshKey]);
 
   return (

@@ -36,17 +36,17 @@ export default function SummaryPanel({
   refreshKey,
 }: SummaryPanelProps) {
   const [data, setData] = useState<SummaryData | null>(null);
-  const [loading, setLoading] = useState(true);
+
+  // data === null means initial loading; after first load, data updates in-place
+  const loading = data === null;
 
   useEffect(() => {
-    setLoading(true);
+    let active = true;
     fetch("/api/summary")
       .then((r) => r.json())
-      .then((d) => {
-        setData(d);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
+      .then((d) => { if (active) setData(d); })
+      .catch(() => {});
+    return () => { active = false; };
   }, [refreshKey]);
 
   const topConfig = data?.topCategory
@@ -61,7 +61,7 @@ export default function SummaryPanel({
         className="w-full px-4 py-2.5 flex items-center gap-2 text-left hover:bg-gray-800/40 transition-colors"
       >
         <div className="flex-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="text-[11px] text-gray-400">
+          <span className="text-[11px] text-gray-400 truncate">
             Today:{" "}
             <span className="text-white font-medium">
               {loading ? <Skeleton /> : formatAmount(data?.today.total ?? 0)}
@@ -96,7 +96,7 @@ export default function SummaryPanel({
         <div className="overflow-hidden">
           <div className="px-4 pb-4 pt-1">
             {/* KPI cards */}
-            <div className="flex gap-3 mb-4">
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mb-4">
               {(
                 [
                   { label: "TODAY", key: "today" },
