@@ -5,7 +5,7 @@
  * Uses pure CSS for bars — no chart library required.
  */
 
-import { CATEGORY_CONFIG, formatAmount } from "./ExpenseCard";
+import { getCategoryConfig, formatAmount } from "@/lib/categoryConfig";
 
 type SummaryCardProps = {
   data: {
@@ -15,21 +15,6 @@ type SummaryCardProps = {
     avgPerExpense?: number;
     topCategory?: string | null;
   };
-};
-
-// Maps category key → Tailwind bg color class for progress bars
-const BAR_COLORS: Record<string, string> = {
-  food: "bg-orange-400",
-  transport: "bg-blue-400",
-  shopping: "bg-pink-400",
-  bills: "bg-yellow-400",
-  entertainment: "bg-purple-400",
-  health: "bg-green-400",
-  education: "bg-indigo-400",
-  groceries: "bg-emerald-400",
-  rent: "bg-red-400",
-  salary: "bg-teal-400",
-  other: "bg-gray-400",
 };
 
 export default function SummaryCard({ data }: SummaryCardProps) {
@@ -58,8 +43,7 @@ export default function SummaryCard({ data }: SummaryCardProps) {
       {/* Category bars */}
       <div className="space-y-2.5">
         {data.summary.map((item) => {
-          const config = CATEGORY_CONFIG[item.category] ?? CATEGORY_CONFIG.other;
-          const barColor = BAR_COLORS[item.category] ?? "bg-gray-400";
+          const config = getCategoryConfig(item.category);
           const pct = data.total > 0 ? (item.total / data.total) * 100 : 0;
 
           return (
@@ -78,7 +62,7 @@ export default function SummaryCard({ data }: SummaryCardProps) {
               </div>
               <div className="h-1.5 rounded-full bg-gray-700 overflow-hidden">
                 <div
-                  className={`h-full rounded-full ${barColor} transition-all duration-500`}
+                  className={`h-full rounded-full ${config.barColor} transition-all duration-500`}
                   style={{ width: `${pct}%` }}
                 />
               </div>

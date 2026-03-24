@@ -6,7 +6,8 @@
  */
 
 import { useState } from "react";
-import ExpenseCard, { type ExpenseData, formatAmount } from "./ExpenseCard";
+import ExpenseCard, { type ExpenseData } from "./ExpenseCard";
+import { formatAmount } from "@/lib/categoryConfig";
 
 type Props = {
   expenses: ExpenseData[];

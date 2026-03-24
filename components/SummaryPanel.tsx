@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { CATEGORY_CONFIG, formatAmount } from "./ExpenseCard";
+import { CATEGORY_CONFIG, formatAmount } from "@/lib/categoryConfig";
 
 type SummaryData = {
   today: { total: number; count: number };
