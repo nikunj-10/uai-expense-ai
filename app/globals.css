@@ -14,3 +14,18 @@
 .animate-message-in {
   animation: messageIn 0.2s ease-out;
 }
+
+@keyframes cardSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-card-in {
+  animation: cardSlideIn 0.3s ease-out;
+}
