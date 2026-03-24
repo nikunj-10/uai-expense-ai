@@ -5,6 +5,7 @@ import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import TypingIndicator from "@/components/TypingIndicator";
 import SummaryPanel from "@/components/SummaryPanel";
+import RecentExpenses from "@/components/RecentExpenses";
 import { type ExpenseData } from "@/components/ExpenseCard";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -60,6 +61,7 @@ export default function Home() {
   const [deletedIds, setDeletedIds] = useState<Set<number>>(new Set());
   const [summaryRefreshKey, setSummaryRefreshKey] = useState(0);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [recentOpen, setRecentOpen] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -284,63 +286,100 @@ export default function Home() {
   }
 
   return (
-    <div className="flex flex-col h-[100dvh] bg-gray-950 text-white">
-      {/* Header */}
-      <header className="shrink-0 bg-gradient-to-r from-blue-600 via-blue-700 to-purple-600 p-4 shadow-lg shadow-black/20 border-b border-white/10">
-        <h1 className="text-base sm:text-lg font-bold text-white text-center">
-          💰 UAI Expense AI
-        </h1>
-        <p className="hidden sm:block text-xs text-blue-100 text-center mt-1">
-          Track your spending with natural language
-        </p>
-      </header>
-
-      {/* Summary panel */}
-      <SummaryPanel
-        isOpen={summaryOpen}
-        onToggle={() => setSummaryOpen((o) => !o)}
-        refreshKey={summaryRefreshKey}
-      />
-
-      {/* Messages area */}
-      <main ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-4">
-        <div className="sm:max-w-2xl mx-auto w-full">
-          {/* Suggestion chips — only shown before first user message */}
-          {!hasUserMessage && (
-            <div className="flex flex-wrap gap-2 mb-4">
-              {SUGGESTION_CHIPS.map(({ icon, text }) => (
-                <button
-                  key={text}
-                  onClick={() => handleSend(text)}
-                  disabled={loading}
-                  className="text-[11px] sm:text-xs bg-gray-800 hover:bg-gray-700 hover:scale-105 text-gray-300 px-3 py-2 rounded-full transition-all disabled:opacity-50"
-                >
-                  {icon} {text}
-                </button>
-              ))}
+    <div className="flex h-[100dvh] bg-gray-950 text-white">
+      {/* Main column */}
+      <div className="flex flex-col flex-1 min-w-0">
+        {/* Header */}
+        <header className="shrink-0 bg-gradient-to-r from-blue-600 via-blue-700 to-purple-600 px-4 py-3 shadow-lg shadow-black/20 border-b border-white/10">
+          <div className="flex items-center justify-between sm:max-w-2xl mx-auto w-full">
+            <div className="flex-1" />
+            <div className="text-center">
+              <h1 className="text-base sm:text-lg font-bold text-white">
+                💰 UAI Expense AI
+              </h1>
+              <p className="hidden sm:block text-xs text-blue-100 mt-0.5">
+                Track your spending with natural language
+              </p>
             </div>
-          )}
+            {/* Recent expenses toggle */}
+            <div className="flex-1 flex justify-end">
+              <button
+                onClick={() => setRecentOpen((o) => !o)}
+                title="Recent expenses"
+                className="text-white/80 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-white/10"
+              >
+                📋
+              </button>
+            </div>
+          </div>
+        </header>
 
-          {/* Message list */}
-          {messages.map((msg, i) => (
-            <ChatMessage
-              key={i}
-              message={msg}
-              onDeleteExpense={handleDeleteExpense}
-              deletedIds={deletedIds}
-            />
-          ))}
+        {/* Summary panel */}
+        <SummaryPanel
+          isOpen={summaryOpen}
+          onToggle={() => setSummaryOpen((o) => !o)}
+          refreshKey={summaryRefreshKey}
+        />
 
-          {/* Typing indicator */}
-          {showTypingIndicator && <TypingIndicator />}
+        {/* Messages area */}
+        <main ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-4">
+          <div className="sm:max-w-2xl mx-auto w-full">
+            {/* Suggestion chips — only shown before first user message */}
+            {!hasUserMessage && (
+              <div className="flex flex-wrap gap-2 mb-4">
+                {SUGGESTION_CHIPS.map(({ icon, text }) => (
+                  <button
+                    key={text}
+                    onClick={() => handleSend(text)}
+                    disabled={loading}
+                    className="text-[11px] sm:text-xs bg-gray-800 hover:bg-gray-700 hover:scale-105 text-gray-300 px-3 py-2 rounded-full transition-all disabled:opacity-50"
+                  >
+                    {icon} {text}
+                  </button>
+                ))}
+              </div>
+            )}
 
-          {/* Scroll anchor */}
-          <div ref={bottomRef} />
+            {/* Message list */}
+            {messages.map((msg, i) => (
+              <ChatMessage
+                key={i}
+                message={msg}
+                onDeleteExpense={handleDeleteExpense}
+                deletedIds={deletedIds}
+              />
+            ))}
+
+            {/* Typing indicator */}
+            {showTypingIndicator && <TypingIndicator />}
+
+            {/* Scroll anchor */}
+            <div ref={bottomRef} />
+          </div>
+        </main>
+
+        {/* Input bar */}
+        <div className="relative">
+          <ChatInput onSend={handleSend} disabled={loading} />
+          {/* Mobile FAB for recent expenses */}
+          <button
+            onClick={() => setRecentOpen((o) => !o)}
+            className="lg:hidden absolute right-4 -top-14 w-10 h-10 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center text-lg shadow-lg hover:bg-gray-700 transition-colors"
+            title="Recent expenses"
+          >
+            📋
+          </button>
         </div>
-      </main>
+      </div>
 
-      {/* Input bar */}
-      <ChatInput onSend={handleSend} disabled={loading} />
+      {/* Recent expenses sidebar (desktop) + bottom sheet (mobile) */}
+      <RecentExpenses
+        isOpen={recentOpen}
+        onToggle={() => setRecentOpen((o) => !o)}
+        onDelete={handleDeleteExpense}
+        refreshKey={summaryRefreshKey}
+        deletedIds={deletedIds}
+      />
     </div>
   );
 }
