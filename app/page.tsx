@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import TypingIndicator from "@/components/TypingIndicator";
+import SummaryPanel from "@/components/SummaryPanel";
 import { type ExpenseData } from "@/components/ExpenseCard";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -58,6 +59,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [deletedIds, setDeletedIds] = useState<Set<number>>(new Set());
   const [summaryRefreshKey, setSummaryRefreshKey] = useState(0);
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -292,6 +294,13 @@ export default function Home() {
           Track your spending with natural language
         </p>
       </header>
+
+      {/* Summary panel */}
+      <SummaryPanel
+        isOpen={summaryOpen}
+        onToggle={() => setSummaryOpen((o) => !o)}
+        refreshKey={summaryRefreshKey}
+      />
 
       {/* Messages area */}
       <main ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-4">
