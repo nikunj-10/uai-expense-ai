@@ -173,6 +173,7 @@ export async function POST(request: Request) {
     ];
 
     let toolRound = 0;
+    const toolResults: Array<{ toolName: string; result: string }> = [];
 
     while (toolRound < MAX_TOOL_ROUNDS) {
       toolRound++;
@@ -216,7 +217,7 @@ export async function POST(request: Request) {
           message.content ||
           "Done! Is there anything else you'd like to track?";
 
-        return streamTextResponse(finalText);
+        return streamResponse(finalText, toolResults);
       }
 
       // Append the assistant's tool_call message to history
@@ -235,6 +236,7 @@ export async function POST(request: Request) {
         console.error(`[tool] ${fnName}`, JSON.stringify(fnArgs));
 
         const result = executeTool(fnName, fnArgs);
+        toolResults.push({ toolName: fnName, result });
 
         groqMessages.push({
           role: "tool",
@@ -245,8 +247,9 @@ export async function POST(request: Request) {
     }
 
     // Safety: exceeded MAX_TOOL_ROUNDS
-    return streamTextResponse(
-      "I got a bit carried away processing that request. Could you try again with a simpler ask?"
+    return streamResponse(
+      "I got a bit carried away processing that request. Could you try again with a simpler ask?",
+      toolResults
     );
   } catch (error) {
     console.error("Chat API error:", error);
@@ -289,12 +292,69 @@ export async function POST(request: Request) {
   }
 }
 
-/** Stream a complete text string as SSE, chunked for a natural feel */
-function streamTextResponse(text: string): Response {
+/**
+ * Stream a response as SSE.
+ * First emits structured data events based on tool results,
+ * then streams the text response in small chunks.
+ */
+function streamResponse(
+  text: string,
+  collectedToolResults: Array<{ toolName: string; result: string }>
+): Response {
   const encoder = new TextEncoder();
 
   const readable = new ReadableStream({
     start(controller) {
+      // ── Step 1: emit structured data events ────────────────────────────
+      for (const { toolName, result } of collectedToolResults) {
+        try {
+          const parsed = JSON.parse(result);
+
+          if (toolName === "log_expense" && parsed.success && parsed.expense) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "expense_logged", expense: parsed.expense })}\n\n`
+              )
+            );
+          }
+
+          if (toolName === "get_expenses" && parsed.expenses) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "expenses_list", expenses: parsed.expenses })}\n\n`
+              )
+            );
+          }
+
+          if (toolName === "get_summary" && parsed.summary) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "summary", data: parsed })}\n\n`
+              )
+            );
+          }
+
+          if (toolName === "get_daily_breakdown" && parsed.days) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "daily_breakdown", data: parsed.days })}\n\n`
+              )
+            );
+          }
+
+          if (toolName === "delete_expense" && parsed.success) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "expense_deleted", id: parsed.id ?? null })}\n\n`
+              )
+            );
+          }
+        } catch {
+          // Skip malformed tool results
+        }
+      }
+
+      // ── Step 2: stream text in small chunks ─────────────────────────────
       const chunkSize = 12;
       let index = 0;
 

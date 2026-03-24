@@ -4,17 +4,43 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
 import TypingIndicator from "@/components/TypingIndicator";
+import { type ExpenseData } from "@/components/ExpenseCard";
+
+// ── Types ──────────────────────────────────────────────────────────────────
+
+type SummaryData = {
+  summary: Array<{ category: string; total: number; count: number }>;
+  total: number;
+  count: number;
+  avgPerExpense?: number;
+  topCategory?: string | null;
+};
+
+type DailyBreakdownData = {
+  date: string;
+  total: number;
+  count: number;
+};
+
+type MessageAttachment =
+  | { type: "expense_logged"; expense: ExpenseData }
+  | { type: "expenses_list"; expenses: ExpenseData[] }
+  | { type: "summary"; data: SummaryData }
+  | { type: "daily_breakdown"; data: DailyBreakdownData[] };
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  attachments?: MessageAttachment[];
 }
+
+// ── Constants ─────────────────────────────────────────────────────────────
 
 const WELCOME_MESSAGE: Message = {
   role: "assistant",
   content:
-    'Hi! I\'m your AI expense tracker. Tell me about your spending — like "I spent ₹500 on groceries" — or ask me anything about your expenses. More features are coming soon!',
+    'Hi! I\'m your AI expense tracker. Tell me about your spending — like "I spent ₹500 on groceries" — or ask me anything about your expenses.',
   timestamp: new Date(),
 };
 
@@ -25,20 +51,21 @@ const SUGGESTION_CHIPS = [
   { icon: "💡", text: "I paid ₹1200 for electricity bill" },
 ];
 
+// ── Component ─────────────────────────────────────────────────────────────
+
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [loading, setLoading] = useState(false);
+  const [deletedIds, setDeletedIds] = useState<Set<number>>(new Set());
+  const [summaryRefreshKey, setSummaryRefreshKey] = useState(0);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const hasUserMessage = messages.some((m) => m.role === "user");
 
-  // Show dots only before the first streaming chunk — once we add the empty
-  // assistant message, the last message is "assistant" and dots hide
   const showTypingIndicator =
     loading && messages[messages.length - 1]?.role === "user";
 
-  // Only auto-scroll if the user is already near the bottom
   const isNearBottom = () => {
     const el = chatContainerRef.current;
     if (!el) return true;
@@ -55,14 +82,26 @@ export default function Home() {
     scrollToBottom();
   }, [messages, loading, scrollToBottom]);
 
-  async function handleSend(text: string) {
-    if (loading) return; // guard against double-send
+  // Delete an expense by sending a chat message — routes through the full AI flow
+  const handleDeleteExpense = useCallback(
+    (id: number) => {
+      handleSend(`Delete expense #${id}`);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
 
-    const userMessage: Message = { role: "user", content: text, timestamp: new Date() };
+  async function handleSend(text: string) {
+    if (loading) return;
+
+    const userMessage: Message = {
+      role: "user",
+      content: text,
+      timestamp: new Date(),
+    };
     setMessages((prev) => [...prev, userMessage]);
     setLoading(true);
 
-    // Build API payload — skip the welcome message (index 0), add new user msg
     const apiMessages = [...messages.slice(1), userMessage].map((m) => ({
       role: m.role,
       content: m.content,
@@ -78,8 +117,6 @@ export default function Home() {
       const contentType = res.headers.get("content-type") ?? "";
 
       if (contentType.includes("text/event-stream")) {
-        // ── Streaming response ─────────────────────────────────────────────
-        // Add an empty assistant message — we'll fill it as chunks arrive
         setMessages((prev) => [
           ...prev,
           { role: "assistant", content: "", timestamp: new Date() },
@@ -118,12 +155,81 @@ export default function Home() {
                   }
                   return updated;
                 });
+              } else if (event.type === "expense_logged") {
+                setSummaryRefreshKey((k) => k + 1);
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last?.role === "assistant") {
+                    updated[updated.length - 1] = {
+                      ...last,
+                      attachments: [
+                        ...(last.attachments ?? []),
+                        { type: "expense_logged", expense: event.expense },
+                      ],
+                    };
+                  }
+                  return updated;
+                });
+              } else if (event.type === "expenses_list") {
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last?.role === "assistant") {
+                    updated[updated.length - 1] = {
+                      ...last,
+                      attachments: [
+                        ...(last.attachments ?? []),
+                        { type: "expenses_list", expenses: event.expenses },
+                      ],
+                    };
+                  }
+                  return updated;
+                });
+              } else if (event.type === "summary") {
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last?.role === "assistant") {
+                    updated[updated.length - 1] = {
+                      ...last,
+                      attachments: [
+                        ...(last.attachments ?? []),
+                        { type: "summary", data: event.data },
+                      ],
+                    };
+                  }
+                  return updated;
+                });
+              } else if (event.type === "daily_breakdown") {
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last?.role === "assistant") {
+                    updated[updated.length - 1] = {
+                      ...last,
+                      attachments: [
+                        ...(last.attachments ?? []),
+                        { type: "daily_breakdown", data: event.data },
+                      ],
+                    };
+                  }
+                  return updated;
+                });
+              } else if (event.type === "expense_deleted") {
+                setSummaryRefreshKey((k) => k + 1);
+                if (event.id) {
+                  setDeletedIds((prev) => new Set(prev).add(event.id));
+                }
               } else if (event.type === "error") {
                 setMessages((prev) => {
                   const updated = [...prev];
                   const last = updated[updated.length - 1];
                   if (last?.role === "assistant") {
-                    updated[updated.length - 1] = { ...last, content: event.error };
+                    updated[updated.length - 1] = {
+                      ...last,
+                      content: event.error,
+                    };
                   }
                   return updated;
                 });
@@ -134,7 +240,6 @@ export default function Home() {
           }
         }
 
-        // If stream ended with no content, show a fallback
         if (!receivedText) {
           setMessages((prev) => {
             const updated = [...prev];
@@ -142,19 +247,24 @@ export default function Home() {
             if (last?.role === "assistant" && last.content === "") {
               updated[updated.length - 1] = {
                 ...last,
-                content: "I didn't have a response for that. Could you try rephrasing?",
+                content:
+                  "I didn't have a response for that. Could you try rephrasing?",
               };
             }
             return updated;
           });
         }
       } else {
-        // ── JSON response (validation error) ──────────────────────────────
         const data = await res.json().catch(() => null);
-        const errorMessage = data?.error ?? "Something went wrong. Please try again.";
+        const errorMessage =
+          data?.error ?? "Something went wrong. Please try again.";
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: errorMessage, timestamp: new Date() },
+          {
+            role: "assistant",
+            content: errorMessage,
+            timestamp: new Date(),
+          },
         ]);
       }
     } catch (error) {
@@ -206,13 +316,13 @@ export default function Home() {
           {messages.map((msg, i) => (
             <ChatMessage
               key={i}
-              role={msg.role}
-              content={msg.content}
-              timestamp={msg.timestamp}
+              message={msg}
+              onDeleteExpense={handleDeleteExpense}
+              deletedIds={deletedIds}
             />
           ))}
 
-          {/* Typing indicator — shown before first streaming chunk arrives */}
+          {/* Typing indicator */}
           {showTypingIndicator && <TypingIndicator />}
 
           {/* Scroll anchor */}

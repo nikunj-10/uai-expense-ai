@@ -3,6 +3,7 @@ import {
   getExpenses,
   getSummaryByCategory,
   deleteExpense,
+  getExpenseById,
   getDailySummary,
 } from "./expenses";
 
@@ -109,8 +110,9 @@ export function executeTool(
           });
         }
 
+        const deletedExpense = getExpenseById(id);
         const result = deleteExpense(id);
-        return JSON.stringify(result);
+        return JSON.stringify({ ...result, id, deletedExpense });
       }
 
       case "get_daily_breakdown": {
