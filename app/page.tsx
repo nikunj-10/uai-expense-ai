@@ -6,6 +6,7 @@ import ChatMessage from "@/components/ChatMessage";
 import TypingIndicator from "@/components/TypingIndicator";
 import SummaryPanel from "@/components/SummaryPanel";
 import RecentExpenses from "@/components/RecentExpenses";
+import WelcomeCard from "@/components/WelcomeCard";
 import { type ExpenseData } from "@/components/ExpenseCard";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -45,13 +46,6 @@ const WELCOME_MESSAGE: Message = {
     'Hi! I\'m your AI expense tracker. Tell me about your spending — like "I spent ₹500 on groceries" — or ask me anything about your expenses.',
   timestamp: new Date(),
 };
-
-const SUGGESTION_CHIPS = [
-  { icon: "🛒", text: "I spent ₹500 on groceries" },
-  { icon: "📊", text: "How much did I spend this week?" },
-  { icon: "📋", text: "Show me my spending summary" },
-  { icon: "💡", text: "I paid ₹1200 for electricity bill" },
-];
 
 // ── Component ─────────────────────────────────────────────────────────────
 
@@ -324,31 +318,26 @@ export default function Home() {
         {/* Messages area */}
         <main ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 sm:p-4">
           <div className="sm:max-w-2xl mx-auto w-full">
-            {/* Suggestion chips — only shown before first user message */}
-            {!hasUserMessage && (
-              <div className="flex flex-wrap gap-2 mb-4">
-                {SUGGESTION_CHIPS.map(({ icon, text }) => (
-                  <button
-                    key={text}
-                    onClick={() => handleSend(text)}
-                    disabled={loading}
-                    className="text-[11px] sm:text-xs bg-gray-800 hover:bg-gray-700 hover:scale-105 text-gray-300 px-3 py-2 rounded-full transition-all disabled:opacity-50"
-                  >
-                    {icon} {text}
-                  </button>
-                ))}
-              </div>
-            )}
-
             {/* Message list */}
-            {messages.map((msg, i) => (
-              <ChatMessage
-                key={i}
-                message={msg}
-                onDeleteExpense={handleDeleteExpense}
-                deletedIds={deletedIds}
-              />
-            ))}
+            {messages.map((msg, i) => {
+              // Render WelcomeCard in place of the first assistant message while no user messages exist
+              if (i === 0 && msg.role === "assistant" && !hasUserMessage) {
+                return (
+                  <WelcomeCard
+                    key="welcome"
+                    onExampleClick={(text) => handleSend(text)}
+                  />
+                );
+              }
+              return (
+                <ChatMessage
+                  key={i}
+                  message={msg}
+                  onDeleteExpense={handleDeleteExpense}
+                  deletedIds={deletedIds}
+                />
+              );
+            })}
 
             {/* Typing indicator */}
             {showTypingIndicator && <TypingIndicator />}

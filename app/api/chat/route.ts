@@ -235,7 +235,7 @@ export async function POST(request: Request) {
 
         console.error(`[tool] ${fnName}`, JSON.stringify(fnArgs));
 
-        const result = executeTool(fnName, fnArgs);
+        const result = await executeTool(fnName, fnArgs);
         toolResults.push({ toolName: fnName, result });
 
         groqMessages.push({

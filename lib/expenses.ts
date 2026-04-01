@@ -1,4 +1,5 @@
-import db from "./db";
+import { getDb, ensureDbInitialized } from "./db";
+import type { Row } from "@libsql/client";
 
 /** A single expense row from the database */
 export type Expense = {
@@ -34,17 +35,26 @@ export const VALID_CATEGORIES = [
 
 export type Category = (typeof VALID_CATEGORIES)[number];
 
+function rowToExpense(row: Row): Expense {
+  return {
+    id: Number(row.id),
+    amount: Number(row.amount),
+    category: String(row.category),
+    description: String(row.description),
+    date: String(row.date),
+    created_at: String(row.created_at ?? ""),
+  };
+}
+
 /**
  * Insert a new expense into the database.
- * Validates amount, category, and date before inserting.
- * Returns the full saved Expense object including id and created_at.
  */
-export function addExpense(
+export async function addExpense(
   amount: number,
   category: string,
   description: string,
   date: string
-): Expense {
+): Promise<Expense> {
   if (amount <= 0 || isNaN(amount)) {
     throw new Error("Amount must be a positive number");
   }
@@ -53,34 +63,42 @@ export function addExpense(
     throw new Error(`Invalid date format: "${date}". Expected YYYY-MM-DD.`);
   }
 
+  await ensureDbInitialized();
+  const client = getDb();
+
   const validCategory = VALID_CATEGORIES.includes(category as Category)
     ? category
     : "other";
 
   const trimmedDescription = description.trim() || validCategory;
 
-  const result = db
-    .prepare(
-      `INSERT INTO expenses (amount, category, description, date)
-       VALUES (?, ?, ?, ?)`
-    )
-    .run(amount, validCategory, trimmedDescription, date);
+  const result = await client.execute({
+    sql: "INSERT INTO expenses (amount, category, description, date) VALUES (?, ?, ?, ?)",
+    args: [amount, validCategory, trimmedDescription, date],
+  });
 
-  return db
-    .prepare(`SELECT * FROM expenses WHERE id = ?`)
-    .get(result.lastInsertRowid) as Expense;
+  const id = Number(result.lastInsertRowid);
+
+  const row = await client.execute({
+    sql: "SELECT * FROM expenses WHERE id = ?",
+    args: [id],
+  });
+
+  return rowToExpense(row.rows[0]);
 }
 
 /**
  * Retrieve expenses with optional date range, category, and limit filters.
- * Results are ordered newest first (by date DESC, then created_at DESC).
  */
-export function getExpenses(options?: {
+export async function getExpenses(options?: {
   startDate?: string;
   endDate?: string;
   category?: string;
   limit?: number;
-}): Expense[] {
+}): Promise<Expense[]> {
+  await ensureDbInitialized();
+  const client = getDb();
+
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
@@ -101,21 +119,23 @@ export function getExpenses(options?: {
     conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
 
   const limit = Math.min(options?.limit ?? 50, 200);
-
-  const query = `SELECT * FROM expenses ${where} ORDER BY date DESC, created_at DESC LIMIT ?`;
   params.push(limit);
 
-  return db.prepare(query).all(...params) as Expense[];
+  const result = await client.execute({
+    sql: `SELECT * FROM expenses ${where} ORDER BY date DESC, created_at DESC LIMIT ?`,
+    args: params,
+  });
+
+  return result.rows.map(rowToExpense);
 }
 
 /**
  * Return a spending summary grouped by category, plus grand totals.
- * Optionally filtered by date range.
  */
-export function getSummaryByCategory(options?: {
+export async function getSummaryByCategory(options?: {
   startDate?: string;
   endDate?: string;
-}): {
+}): Promise<{
   summary: CategorySummary[];
   total: number;
   count: number;
@@ -123,7 +143,10 @@ export function getSummaryByCategory(options?: {
   dateRange: { start: string; end: string } | null;
   topCategory: string | null;
   topExpense: Expense | null;
-} {
+}> {
+  await ensureDbInitialized();
+  const client = getDb();
+
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
@@ -139,42 +162,49 @@ export function getSummaryByCategory(options?: {
   const where =
     conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
 
-  const summary = db
-    .prepare(
-      `SELECT category, SUM(amount) as total, COUNT(*) as count
-       FROM expenses ${where}
-       GROUP BY category
-       ORDER BY total DESC`
-    )
-    .all(...params) as CategorySummary[];
+  const [summaryResult, totalResult, dateRangeResult, topExpenseResult] =
+    await Promise.all([
+      client.execute({
+        sql: `SELECT category, SUM(amount) as total, COUNT(*) as count
+              FROM expenses ${where}
+              GROUP BY category
+              ORDER BY total DESC`,
+        args: params,
+      }),
+      client.execute({
+        sql: `SELECT SUM(amount) as total, COUNT(*) as count FROM expenses ${where}`,
+        args: params,
+      }),
+      client.execute({
+        sql: `SELECT MIN(date) as start, MAX(date) as end FROM expenses ${where}`,
+        args: params,
+      }),
+      client.execute({
+        sql: `SELECT * FROM expenses ${where} ORDER BY amount DESC LIMIT 1`,
+        args: params,
+      }),
+    ]);
 
-  const totalRow = db
-    .prepare(
-      `SELECT SUM(amount) as total, COUNT(*) as count FROM expenses ${where}`
-    )
-    .get(...params) as { total: number | null; count: number };
+  const summary: CategorySummary[] = summaryResult.rows.map((r) => ({
+    category: String(r.category),
+    total: Number(r.total),
+    count: Number(r.count),
+  }));
 
-  const total = totalRow.total ?? 0;
-  const count = totalRow.count ?? 0;
+  const totalRow = totalResult.rows[0];
+  const total = totalRow?.total != null ? Number(totalRow.total) : 0;
+  const count = totalRow?.count != null ? Number(totalRow.count) : 0;
 
-  const dateRangeRow = db
-    .prepare(
-      `SELECT MIN(date) as start, MAX(date) as end FROM expenses ${where}`
-    )
-    .get(...params) as { start: string | null; end: string | null };
-
+  const dateRangeRow = dateRangeResult.rows[0];
   const dateRange =
-    dateRangeRow.start && dateRangeRow.end
-      ? { start: dateRangeRow.start, end: dateRangeRow.end }
+    dateRangeRow?.start && dateRangeRow?.end
+      ? { start: String(dateRangeRow.start), end: String(dateRangeRow.end) }
       : null;
 
-  const topCategory = summary.length > 0 ? summary[0].category : null;
-
-  const topExpense = db
-    .prepare(
-      `SELECT * FROM expenses ${where} ORDER BY amount DESC LIMIT 1`
-    )
-    .get(...params) as Expense | undefined ?? null;
+  const topExpense =
+    topExpenseResult.rows.length > 0
+      ? rowToExpense(topExpenseResult.rows[0])
+      : null;
 
   return {
     summary,
@@ -182,27 +212,30 @@ export function getSummaryByCategory(options?: {
     count,
     avgPerExpense: count > 0 ? Math.round((total / count) * 100) / 100 : 0,
     dateRange,
-    topCategory,
+    topCategory: summary.length > 0 ? summary[0].category : null,
     topExpense,
   };
 }
 
 /**
  * Delete an expense by ID.
- * Returns success/failure with a descriptive message.
  */
-export function deleteExpense(
+export async function deleteExpense(
   id: number
-): { success: boolean; message: string } {
+): Promise<{ success: boolean; message: string }> {
   if (!Number.isInteger(id) || id <= 0) {
     return { success: false, message: "Invalid expense ID." };
   }
 
-  const result = db
-    .prepare(`DELETE FROM expenses WHERE id = ?`)
-    .run(id);
+  await ensureDbInitialized();
+  const client = getDb();
 
-  if (result.changes === 0) {
+  const result = await client.execute({
+    sql: "DELETE FROM expenses WHERE id = ?",
+    args: [id],
+  });
+
+  if (result.rowsAffected === 0) {
     return { success: false, message: `No expense found with ID ${id}.` };
   }
 
@@ -211,34 +244,44 @@ export function deleteExpense(
 
 /**
  * Look up a single expense by ID.
- * Returns the expense or null if not found.
  */
-export function getExpenseById(id: number): Expense | null {
-  return (
-    (db
-      .prepare(`SELECT * FROM expenses WHERE id = ?`)
-      .get(id) as Expense | undefined) ?? null
-  );
+export async function getExpenseById(id: number): Promise<Expense | null> {
+  await ensureDbInitialized();
+  const client = getDb();
+
+  const result = await client.execute({
+    sql: "SELECT * FROM expenses WHERE id = ?",
+    args: [id],
+  });
+
+  return result.rows.length > 0 ? rowToExpense(result.rows[0]) : null;
 }
 
 /**
  * Return the N most recently created expenses (by created_at).
- * Defaults to the last 5.
  */
-export function getRecentExpenses(count: number = 5): Expense[] {
-  return db
-    .prepare(`SELECT * FROM expenses ORDER BY created_at DESC LIMIT ?`)
-    .all(count) as Expense[];
+export async function getRecentExpenses(count: number = 5): Promise<Expense[]> {
+  await ensureDbInitialized();
+  const client = getDb();
+
+  const result = await client.execute({
+    sql: "SELECT * FROM expenses ORDER BY created_at DESC LIMIT ?",
+    args: [count],
+  });
+
+  return result.rows.map(rowToExpense);
 }
 
 /**
  * Return day-by-day spending totals, optionally filtered by date range.
- * Ordered newest first.
  */
-export function getDailySummary(options?: {
+export async function getDailySummary(options?: {
   startDate?: string;
   endDate?: string;
-}): Array<{ date: string; total: number; count: number }> {
+}): Promise<Array<{ date: string; total: number; count: number }>> {
+  await ensureDbInitialized();
+  const client = getDb();
+
   const conditions: string[] = [];
   const params: (string | number)[] = [];
 
@@ -254,39 +297,42 @@ export function getDailySummary(options?: {
   const where =
     conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
 
-  return db
-    .prepare(
-      `SELECT date, SUM(amount) as total, COUNT(*) as count
-       FROM expenses ${where}
-       GROUP BY date
-       ORDER BY date DESC`
-    )
-    .all(...params) as Array<{ date: string; total: number; count: number }>;
+  const result = await client.execute({
+    sql: `SELECT date, SUM(amount) as total, COUNT(*) as count
+          FROM expenses ${where}
+          GROUP BY date
+          ORDER BY date DESC`,
+    args: params,
+  });
+
+  return result.rows.map((r) => ({
+    date: String(r.date),
+    total: Number(r.total),
+    count: Number(r.count),
+  }));
 }
 
 /**
  * Return the total spending for a specific year/month.
- * Calculates daily average based on days elapsed so far this month
- * (not the full month length), so mid-month figures are realistic.
  */
-export function getMonthlyTotal(
+export async function getMonthlyTotal(
   year: number,
   month: number
-): { total: number; count: number; dailyAverage: number } {
+): Promise<{ total: number; count: number; dailyAverage: number }> {
+  await ensureDbInitialized();
+  const client = getDb();
+
   const monthStr = `${year}-${String(month).padStart(2, "0")}`;
 
-  const row = db
-    .prepare(
-      `SELECT SUM(amount) as total, COUNT(*) as count
-       FROM expenses
-       WHERE date LIKE ?`
-    )
-    .get(`${monthStr}-%`) as { total: number | null; count: number };
+  const result = await client.execute({
+    sql: "SELECT SUM(amount) as total, COUNT(*) as count FROM expenses WHERE date LIKE ?",
+    args: [`${monthStr}-%`],
+  });
 
-  const total = row.total ?? 0;
-  const count = row.count ?? 0;
+  const row = result.rows[0];
+  const total = row?.total != null ? Number(row.total) : 0;
+  const count = row?.count != null ? Number(row.count) : 0;
 
-  // Days elapsed: if current month, use today's date; otherwise use full month
   const now = new Date();
   const isCurrentMonth =
     now.getFullYear() === year && now.getMonth() + 1 === month;

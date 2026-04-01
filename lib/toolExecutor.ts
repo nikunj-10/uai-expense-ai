@@ -12,10 +12,10 @@ import {
  * Returns a JSON string result — success or structured error.
  * Never throws; all errors are caught and returned as JSON.
  */
-export function executeTool(
+export async function executeTool(
   name: string,
   input: Record<string, unknown> | null
-): string {
+): Promise<string> {
   // Groq occasionally passes null for tools with no required params — normalise to {}
   const args: Record<string, unknown> = input ?? {};
   try {
@@ -42,7 +42,7 @@ export function executeTool(
           });
         }
 
-        const expense = addExpense(amount, category, description, date);
+        const expense = await addExpense(amount, category, description, date);
 
         return JSON.stringify({
           success: true,
@@ -52,7 +52,7 @@ export function executeTool(
       }
 
       case "get_expenses": {
-        const expenses = getExpenses({
+        const expenses = await getExpenses({
           startDate: args.start_date as string | undefined,
           endDate: args.end_date as string | undefined,
           category: args.category as string | undefined,
@@ -75,7 +75,7 @@ export function executeTool(
       }
 
       case "get_summary": {
-        const result = getSummaryByCategory({
+        const result = await getSummaryByCategory({
           startDate: args.start_date as string | undefined,
           endDate: args.end_date as string | undefined,
         });
@@ -110,13 +110,13 @@ export function executeTool(
           });
         }
 
-        const deletedExpense = getExpenseById(id);
-        const result = deleteExpense(id);
+        const deletedExpense = await getExpenseById(id);
+        const result = await deleteExpense(id);
         return JSON.stringify({ ...result, id, deletedExpense });
       }
 
       case "get_daily_breakdown": {
-        const rows = getDailySummary({
+        const rows = await getDailySummary({
           startDate: args.start_date as string | undefined,
           endDate: args.end_date as string | undefined,
         });

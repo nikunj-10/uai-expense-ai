@@ -36,16 +36,28 @@ export default function SummaryPanel({
   refreshKey,
 }: SummaryPanelProps) {
   const [data, setData] = useState<SummaryData | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // data === null means initial loading; after first load, data updates in-place
-  const loading = data === null;
+  const loading = data === null && fetchError === null;
 
   useEffect(() => {
     let active = true;
     fetch("/api/summary")
       .then((r) => r.json())
-      .then((d) => { if (active) setData(d); })
-      .catch(() => {});
+      .then((d: SummaryData & { error?: string }) => {
+        if (!active) return;
+        if (d.error) {
+          setFetchError(d.error);
+          setData(d);
+        } else {
+          setFetchError(null);
+          setData(d);
+        }
+      })
+      .catch(() => {
+        if (active) setFetchError("Could not load summary.");
+      });
     return () => { active = false; };
   }, [refreshKey]);
 
@@ -61,26 +73,40 @@ export default function SummaryPanel({
         className="w-full px-4 py-2.5 flex items-center gap-2 text-left hover:bg-gray-800/40 transition-colors"
       >
         <div className="flex-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="text-[11px] text-gray-400 truncate">
-            Today:{" "}
-            <span className="text-white font-medium">
-              {loading ? <Skeleton /> : formatAmount(data?.today.total ?? 0)}
+          {fetchError ? (
+            <span className="text-[11px] text-red-400 truncate">
+              ⚠ {fetchError}
             </span>
-          </span>
-          <span className="text-gray-700 hidden sm:inline">·</span>
-          <span className="hidden sm:inline text-[11px] text-gray-400">
-            Month:{" "}
-            <span className="text-white font-medium">
-              {loading ? <Skeleton /> : formatAmount(data?.month.total ?? 0)}
+          ) : loading ? (
+            <Skeleton />
+          ) : data?.month.count === 0 ? (
+            <span className="text-[11px] text-gray-500 truncate">
+              No expenses yet — start tracking by telling me what you spent!
             </span>
-          </span>
-          <span className="text-gray-700 hidden sm:inline">·</span>
-          <span className="hidden sm:inline text-[11px] text-gray-400">
-            <span className="text-white font-medium">
-              {loading ? <Skeleton /> : data?.month.count ?? 0}
-            </span>{" "}
-            expenses
-          </span>
+          ) : (
+            <>
+              <span className="text-[11px] text-gray-400 truncate">
+                Today:{" "}
+                <span className="text-white font-medium">
+                  {formatAmount(data?.today.total ?? 0)}
+                </span>
+              </span>
+              <span className="text-gray-700 hidden sm:inline">·</span>
+              <span className="hidden sm:inline text-[11px] text-gray-400">
+                Month:{" "}
+                <span className="text-white font-medium">
+                  {formatAmount(data?.month.total ?? 0)}
+                </span>
+              </span>
+              <span className="text-gray-700 hidden sm:inline">·</span>
+              <span className="hidden sm:inline text-[11px] text-gray-400">
+                <span className="text-white font-medium">
+                  {data?.month.count ?? 0}
+                </span>{" "}
+                expenses
+              </span>
+            </>
+          )}
         </div>
         <span className="text-gray-500 text-xs shrink-0 select-none">
           {isOpen ? "▲" : "▼"}

@@ -21,6 +21,7 @@ type RecentExpensesProps = {
 type RecentData = {
   expenses: ExpenseData[];
   total: number;
+  error?: string;
 };
 
 function Skeleton() {
@@ -36,12 +37,14 @@ function Skeleton() {
 function PanelContent({
   data,
   loading,
+  fetchError,
   onDelete,
   deletedIds,
   onClose,
 }: {
   data: RecentData | null;
   loading: boolean;
+  fetchError: string | null;
   onDelete: (id: number) => void;
   deletedIds: Set<number>;
   onClose: () => void;
@@ -66,8 +69,16 @@ function PanelContent({
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <Skeleton />
+        ) : fetchError ? (
+          <p className="text-sm text-red-400 p-4">⚠ {fetchError}</p>
         ) : data?.expenses.length === 0 ? (
-          <p className="text-sm text-gray-500 p-4">No expenses yet.</p>
+          <div className="flex flex-col items-center justify-center h-full py-12 px-4 text-center">
+            <p className="text-3xl mb-3">📝</p>
+            <p className="text-sm font-medium text-gray-400 mb-1">No expenses yet</p>
+            <p className="text-xs text-gray-600">
+              Tell me what you spent<br />and it&apos;ll show up here!
+            </p>
+          </div>
         ) : (
           <div className="p-2 space-y-1.5">
             {data?.expenses.map((expense) => {
@@ -111,17 +122,24 @@ export default function RecentExpenses({
   deletedIds,
 }: RecentExpensesProps) {
   const [data, setData] = useState<RecentData | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
-  // data === null means initial loading; after first load, data updates in-place
-  const loading = data === null;
+  // data === null and no error means initial loading
+  const loading = data === null && fetchError === null;
 
   useEffect(() => {
     if (!isOpen) return;
     let active = true;
     fetch("/api/expenses/recent")
       .then((r) => r.json())
-      .then((d) => { if (active) setData(d); })
-      .catch(() => {});
+      .then((d: RecentData) => {
+        if (!active) return;
+        setFetchError(d.error ?? null);
+        setData(d);
+      })
+      .catch(() => {
+        if (active) setFetchError("Could not load recent expenses.");
+      });
     return () => { active = false; };
   }, [isOpen, refreshKey]);
 
@@ -137,6 +155,7 @@ export default function RecentExpenses({
           <PanelContent
             data={data}
             loading={loading}
+            fetchError={fetchError}
             onDelete={onDelete}
             deletedIds={deletedIds}
             onClose={onToggle}
@@ -167,6 +186,7 @@ export default function RecentExpenses({
             <PanelContent
               data={data}
               loading={loading}
+              fetchError={fetchError}
               onDelete={onDelete}
               deletedIds={deletedIds}
               onClose={onToggle}
