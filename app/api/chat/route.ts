@@ -2,6 +2,9 @@ import Groq from "groq-sdk";
 import { tools } from "@/lib/tools";
 import { executeTool } from "@/lib/toolExecutor";
 
+// Allow up to 60s on Vercel Pro; Hobby is capped at 10s but this signals intent
+export const maxDuration = 60;
+
 const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 type GroqMessage = Groq.Chat.Completions.ChatCompletionMessageParam;
@@ -11,7 +14,6 @@ interface IncomingMessage {
   content: string;
 }
 
-/** Builds the system prompt with today's date and relative date helpers injected */
 function buildSystemPrompt(): string {
   const now = new Date();
   const today = now.toISOString().split("T")[0];
@@ -160,226 +162,166 @@ export async function POST(request: Request) {
 
   const validatedMessages = body.messages as IncomingMessage[];
 
-  // ── 4. Tool execution loop → then stream final response ───────────────────
-  try {
-    const systemPrompt = buildSystemPrompt();
-
-    const groqMessages: GroqMessage[] = [
-      { role: "system", content: systemPrompt },
-      ...validatedMessages.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      })),
-    ];
-
-    let toolRound = 0;
-    const toolResults: Array<{ toolName: string; result: string }> = [];
-
-    while (toolRound < MAX_TOOL_ROUNDS) {
-      toolRound++;
-
-      // Retry up to 3x on tool_use_failed or 429 rate limit
-      let response: Groq.Chat.Completions.ChatCompletion | null = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          response = await client.chat.completions.create({
-            model: "llama-3.3-70b-versatile",
-            max_tokens: 1024,
-            tools,
-            tool_choice: "auto",
-            messages: groqMessages,
-          });
-          break;
-        } catch (err) {
-          if (err instanceof Groq.APIError) {
-            const code = (err.error as Record<string, unknown>)?.code;
-            const isToolFailed = err.status === 400 && code === "tool_use_failed";
-            const isRateLimit = err.status === 429;
-            if ((isToolFailed || isRateLimit) && attempt < 2) {
-              const delay = isRateLimit ? 20000 : 0;
-              console.error(`[retry] ${code ?? err.status} — attempt ${attempt + 1}, waiting ${delay}ms`);
-              if (delay) await new Promise((r) => setTimeout(r, delay));
-              continue;
-            }
-          }
-          throw err;
-        }
-      }
-      if (!response) throw new Error("No response after retries");
-
-      const choice = response.choices[0];
-      const message = choice.message;
-      const toolCalls = message.tool_calls;
-
-      // No tool calls — Claude has a final text response
-      if (!toolCalls || toolCalls.length === 0 || choice.finish_reason !== "tool_calls") {
-        const finalText =
-          message.content ||
-          "Done! Is there anything else you'd like to track?";
-
-        return streamResponse(finalText, toolResults);
-      }
-
-      // Append the assistant's tool_call message to history
-      groqMessages.push(message as GroqMessage);
-
-      // Execute each tool and append results
-      for (const toolCall of toolCalls) {
-        const fnName = toolCall.function.name;
-        let fnArgs: Record<string, unknown> = {};
-        try {
-          fnArgs = JSON.parse(toolCall.function.arguments);
-        } catch {
-          fnArgs = {};
-        }
-
-        console.error(`[tool] ${fnName}`, JSON.stringify(fnArgs));
-
-        const result = await executeTool(fnName, fnArgs);
-        toolResults.push({ toolName: fnName, result });
-
-        groqMessages.push({
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: result,
-        });
-      }
-    }
-
-    // Safety: exceeded MAX_TOOL_ROUNDS
-    return streamResponse(
-      "I got a bit carried away processing that request. Could you try again with a simpler ask?",
-      toolResults
-    );
-  } catch (error) {
-    console.error("Chat API error:", error);
-
-    if (error instanceof Groq.APIError) {
-      const status = error.status;
-      if (status === 401) {
-        return Response.json(
-          { error: "AI service configuration error. Please try again later." },
-          { status: 500 }
-        );
-      }
-      if (status === 429) {
-        return Response.json(
-          { error: "Too many requests right now. Please wait a moment and try again." },
-          { status: 429 }
-        );
-      }
-      if (status === 503 || status === 529) {
-        return Response.json(
-          { error: "AI service is temporarily busy. Please try again in a few seconds." },
-          { status: 503 }
-        );
-      }
-      if (
-        error.message?.toLowerCase().includes("context") ||
-        error.message?.toLowerCase().includes("token")
-      ) {
-        return Response.json(
-          { error: "Our conversation has gotten too long. Try starting a new chat." },
-          { status: 400 }
-        );
-      }
-    }
-
-    return Response.json(
-      { error: "Something went wrong. Please try again." },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * Stream a response as SSE.
- * First emits structured data events based on tool results,
- * then streams the text response in small chunks.
- */
-function streamResponse(
-  text: string,
-  collectedToolResults: Array<{ toolName: string; result: string }>
-): Response {
+  // ── 4. Start SSE stream immediately — all processing happens inside ────────
+  // This prevents Vercel from timing out while waiting for Groq + tool calls.
   const encoder = new TextEncoder();
 
   const readable = new ReadableStream({
-    start(controller) {
-      // ── Step 1: emit structured data events ────────────────────────────
-      for (const { toolName, result } of collectedToolResults) {
-        try {
-          const parsed = JSON.parse(result);
-
-          if (toolName === "log_expense" && parsed.success && parsed.expense) {
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ type: "expense_logged", expense: parsed.expense })}\n\n`
-              )
-            );
-          }
-
-          if (toolName === "get_expenses" && parsed.expenses) {
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ type: "expenses_list", expenses: parsed.expenses })}\n\n`
-              )
-            );
-          }
-
-          if (toolName === "get_summary" && parsed.summary) {
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ type: "summary", data: parsed })}\n\n`
-              )
-            );
-          }
-
-          if (toolName === "get_daily_breakdown" && parsed.days) {
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ type: "daily_breakdown", data: parsed.days })}\n\n`
-              )
-            );
-          }
-
-          if (toolName === "delete_expense" && parsed.success) {
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ type: "expense_deleted", id: parsed.id ?? null })}\n\n`
-              )
-            );
-          }
-        } catch {
-          // Skip malformed tool results
-        }
+    async start(controller) {
+      function send(obj: object) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
       }
 
-      // ── Step 2: stream text in small chunks ─────────────────────────────
-      const chunkSize = 12;
-      let index = 0;
-
-      function pushChunk() {
-        if (index >= text.length) {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`)
-          );
-          controller.close();
-          return;
+      function friendlyError(error: unknown): string {
+        if (error instanceof Groq.APIError) {
+          const status = error.status;
+          if (status === 401) return "AI service configuration error. Please contact support.";
+          if (status === 429) return "I'm getting a lot of requests right now. Please wait 30 seconds and try again.";
+          if (status === 503 || status === 529) return "AI service is temporarily busy. Please try again in a moment.";
+          if (
+            error.message?.toLowerCase().includes("context") ||
+            error.message?.toLowerCase().includes("token")
+          ) return "Our conversation has gotten very long. Try starting a new chat.";
         }
-
-        const chunk = text.slice(index, index + chunkSize);
-        index += chunkSize;
-
-        controller.enqueue(
-          encoder.encode(
-            `data: ${JSON.stringify({ type: "text", text: chunk })}\n\n`
-          )
-        );
-
-        setTimeout(pushChunk, 15);
+        const msg = error instanceof Error ? error.message : "";
+        if (msg.includes("ECONNREFUSED") || msg.includes("fetch failed")) {
+          return "Could not reach AI service. Check your internet connection.";
+        }
+        return "Something unexpected happened. Please try again.";
       }
 
-      pushChunk();
+      try {
+        const systemPrompt = buildSystemPrompt();
+        const groqMessages: GroqMessage[] = [
+          { role: "system", content: systemPrompt },
+          ...validatedMessages.map((m) => ({
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          })),
+        ];
+
+        let toolRound = 0;
+        const toolResults: Array<{ toolName: string; result: string }> = [];
+
+        while (toolRound < MAX_TOOL_ROUNDS) {
+          toolRound++;
+
+          let response: Groq.Chat.Completions.ChatCompletion | null = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              response = await client.chat.completions.create({
+                model: "llama-3.3-70b-versatile",
+                max_tokens: 1024,
+                tools,
+                tool_choice: "auto",
+                messages: groqMessages,
+              });
+              break;
+            } catch (err) {
+              if (err instanceof Groq.APIError) {
+                const code = (err.error as Record<string, unknown>)?.code;
+                const isToolFailed = err.status === 400 && code === "tool_use_failed";
+                const isRateLimit = err.status === 429;
+                if ((isToolFailed || isRateLimit) && attempt < 2) {
+                  const delay = isRateLimit ? 20000 : 0;
+                  console.error(`[retry] ${code ?? err.status} — attempt ${attempt + 1}`);
+                  if (delay) await new Promise((r) => setTimeout(r, delay));
+                  continue;
+                }
+              }
+              throw err;
+            }
+          }
+          if (!response) throw new Error("No response after retries");
+
+          const choice = response.choices[0];
+          const message = choice.message;
+          const toolCalls = message.tool_calls;
+
+          if (!toolCalls || toolCalls.length === 0 || choice.finish_reason !== "tool_calls") {
+            const finalText =
+              message.content || "Done! Is there anything else you'd like to track?";
+
+            // Emit structured data events
+            for (const { toolName, result } of toolResults) {
+              try {
+                const parsed = JSON.parse(result);
+
+                if (toolName === "log_expense" && parsed.success && parsed.expense) {
+                  send({ type: "expense_logged", expense: parsed.expense });
+                }
+                if (toolName === "get_expenses" && parsed.expenses) {
+                  send({ type: "expenses_list", expenses: parsed.expenses });
+                }
+                if (toolName === "get_summary" && parsed.summary) {
+                  send({ type: "summary", data: parsed });
+                }
+                if (toolName === "get_daily_breakdown" && parsed.days) {
+                  send({ type: "daily_breakdown", data: parsed.days });
+                }
+                if (toolName === "delete_expense" && parsed.success) {
+                  send({ type: "expense_deleted", id: parsed.id ?? null });
+                }
+              } catch {
+                // Skip malformed tool results
+              }
+            }
+
+            // Stream text in chunks
+            const chunkSize = 12;
+            let index = 0;
+            await new Promise<void>((resolve) => {
+              function pushChunk() {
+                if (index >= finalText.length) {
+                  send({ type: "done" });
+                  controller.close();
+                  resolve();
+                  return;
+                }
+                const chunk = finalText.slice(index, index + chunkSize);
+                index += chunkSize;
+                send({ type: "text", text: chunk });
+                setTimeout(pushChunk, 15);
+              }
+              pushChunk();
+            });
+            return;
+          }
+
+          groqMessages.push(message as GroqMessage);
+
+          for (const toolCall of toolCalls) {
+            const fnName = toolCall.function.name;
+            let fnArgs: Record<string, unknown> = {};
+            try {
+              fnArgs = JSON.parse(toolCall.function.arguments);
+            } catch {
+              fnArgs = {};
+            }
+
+            console.error(`[tool] ${fnName}`, JSON.stringify(fnArgs));
+
+            const result = await executeTool(fnName, fnArgs);
+            toolResults.push({ toolName: fnName, result });
+
+            groqMessages.push({
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: result,
+            });
+          }
+        }
+
+        // Safety: exceeded MAX_TOOL_ROUNDS
+        send({ type: "text", text: "I got a bit carried away. Could you try again with a simpler ask?" });
+        send({ type: "done" });
+        controller.close();
+
+      } catch (error) {
+        console.error("Chat stream error:", error);
+        send({ type: "error", error: friendlyError(error) });
+        controller.close();
+      }
     },
   });
 
