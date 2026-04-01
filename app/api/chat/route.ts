@@ -60,6 +60,9 @@ TOOL USAGE RULES:
 - If a user logs multiple expenses in one message ("₹500 on food and ₹200 on transport"),
   call log_expense ONCE for EACH expense (multiple tool calls).
 - NEVER make up or estimate expense data. ONLY use data from tool results.
+- CRITICAL: Only call log_expense for expenses mentioned in the CURRENT user message.
+  NEVER re-log expenses from earlier messages in the conversation history — they are
+  already saved. Each expense must only be logged once.
 
 FORMATTING RULES FOR SUMMARIES:
 When showing spending summaries, format like this:
